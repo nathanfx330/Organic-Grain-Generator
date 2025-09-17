@@ -9,43 +9,43 @@ Instead of using a simple overlay, this tool simulates the distinct components o
 
 ---
 
-## Key Features
+## ✨ Key Features
 
-### VFX Pipeline Ready
-- **Reproducible Noise Seed**: Ensure noise patterns are deterministic and repeatable for consistent results.
-- **Frame Sequence Export**: Export noise plates as numbered image sequences (`plate.1001.png`, `plate.1002.png`, etc.) with custom prefixes, start and end frames.
-- **Custom Resolution**: Generate plates at HD, 4K, 8K, or any resolution.
+### 🎬 VFX Pipeline Ready
+- **Reproducible Noise Seed**: Set a master seed to ensure patterns are 100% deterministic and repeatable.  
+- **Frame Sequence Export**: Export noise plates as numbered image sequences (e.g., `plate.1001.png`, `plate.1002.png`) with custom prefix, start frame, and end frame.  
+- **Custom Resolution**: Generate plates at any resolution (HD, 4K, 8K, etc.).
 
-### Advanced Noise Model
-- **Component-Based Simulation**:
-  - **Fixed-Pattern Noise (FPN)**: Simulates PRNU gain and DSNU offset.
-  - **Random Noise**: Shot (Poisson) + Read (Gaussian) noise.
-  - **Color Noise**: Independent chrominance noise for rich grain.
-  - **"Firefly" Noise**: Hot pixels (e.g., GH4 high ISO look) with density, intensity, and coloration controls.
-  - **Banding Noise**: Horizontal pattern noise via Perlin noise.
-  - **Quantization**: Simulates bit-depth reduction.
+### 🔬 Advanced Noise Model
+Individually control different types of noise for a highly realistic result:
+- **Fixed-Pattern Noise (FPN)** – Sensor imperfections (PRNU gain & DSNU offset).  
+- **Random Noise** – Signal-dependent Shot (Poisson) noise + signal-independent Read (Gaussian) noise.  
+- **Color Noise** – Independent chrominance noise for rich, colorful grain.  
+- **Firefly Noise** – Simulates the bright "hot pixels" seen in high ISO footage (e.g., Panasonic GH4).  
+- **Banding Noise** – Horizontal noise generated with Perlin noise.  
+- **Quantization** – Simulates bit-depth reduction, creating posterization and banding effects.
 
-### Optimized for High Resolutions
-- **Performance Controls**: Disable "Real-time Preview" to avoid lag at 4K+. Regenerate manually when needed.
-- **Scalable Preview**: Zoom dropdown (`Fit to Window`, 100%, 50%, 25%).
-- **Live Detail View**: 500% zoom window for pixel-level analysis.
-
----
-
-## Why Use This Tool?
-
-Adding realistic camera noise helps to:
-- Integrate CG elements into live-action footage.
-- Add realism and consistency across shots.
-- Generate unique procedural textures.
-- Study and replicate digital sensor noise components.
+### ⚡ Optimized for High Resolutions
+- **Performance Controls**: Disable "Real-time Preview" when working in 4K+ and update manually.  
+- **Scalable Preview**: Zoom options (`Fit to Window`, 100%, 50%, 25%).  
+- **Live Detail View**: Separate, 500% zoom "pixel-peeping" window to analyze fine grain structure in real time.
 
 ---
 
-## Installation
+## 💡 Why Use This Tool?
+
+Adding realistic camera noise is one of the most effective ways to integrate CG elements into live-action footage. It helps to:  
+- Add realism to renders and composites.  
+- Ensure consistent grain across multiple shots/artists.  
+- Generate unique textures for procedural materials.  
+- Study and replicate individual noise components.
+
+---
+
+## 🚀 Installation
 
 ### Prerequisites
-- Python 3.9+
+- Python **3.9+**
 
 ### Install Dependencies
 ```bash
@@ -54,7 +54,7 @@ pip install numpy Pillow perlin-noise
 
 ---
 
-## Usage
+## ▶️ Usage
 
 Run the application:
 
@@ -64,38 +64,31 @@ python app.py
 
 ### Workflow
 
-1. **Set Core Parameters**: Enter Width, Height, and Noise Seed. Click *Update Dimensions*.
-2. **Craft the Noise**: Adjust sliders for different noise components.
-3. **Control Preview**:
+1. **Set Core Parameters**
 
-   * Use Zoom dropdown for scaling.
-   * Disable *Real-time Preview* at high resolutions; refresh manually.
-4. **Inspect Details**: Open *Show Detail View* for 500% zoom.
-5. **Export Plates**:
+   * Enter Width, Height, and Noise Seed.
+   * Click **Update Dimensions** to generate the base plate.
 
-   * Single shot: *Save Single Image*.
-   * Sequence: Fill export fields → *Export Sequence*.
+2. **Craft the Noise**
 
----
+   * Adjust sliders to control different noise components.
+   * Preview updates automatically (if enabled).
 
-## Contributing
+3. **Control the Preview**
 
-Contributions are welcome!
-Open an issue or submit a pull request for:
+   * Use the **Zoom dropdown** to resize the main view.
+   * Disable **Real-time Preview** for large resolutions and refresh manually.
+   * Open **Detail View** for a live 500% zoomed preview.
 
-* New features
-* Bug fixes
-* Performance improvements
+4. **Export**
 
-### Potential Future Features
-
-* **Presets**: Save/load configurations for camera profiles.
-* **More Banding Types**: Vertical or structured patterns.
-* **Anamorphic Grain**: Non-square pixel aspect ratios.
+   * **Single Image**: Save a single noise plate.
+   * **Sequence**: Configure export fields and save a numbered sequence.
 
 ---
 
-## License
+## 📜 License
 
-This project is licensed under the **MIT License**.
-See the [LICENSE](LICENSE) file for details.
+This project is licensed under the [MIT License](LICENSE).
+
+```
