@@ -26,7 +26,7 @@ except AttributeError:
 class OrganicGrainGeneratorApp:
     def __init__(self, master):
         self.master = master
-        self.master.title("Organic Grain Generator") # <-- CORRECTED TITLE
+        self.master.title("Organic Grain Generator")
         self.master.geometry("1400x800")
 
         # --- Core Properties ---
@@ -87,7 +87,7 @@ class OrganicGrainGeneratorApp:
         # --- ADD CREDITS LABEL to the bottom frame ---
         credits_label = ttk.Label(
             credits_frame,
-            text="Organic Grain Generator | Written by Nathaniel Westveer", # <-- CORRECTED CREDITS
+            text="Organic Grain Generator | Written by Nathaniel Westveer",
             style="TLabel",
             anchor=tk.E # Anchor text to the East (right)
         )
@@ -403,31 +403,56 @@ class OrganicGrainGeneratorApp:
         luma_image *= (1.0 + (prnu_map - 1.0) * self.sliders["PRNU (Gain FPN)"].get())
         luma_image += dsnu_map * self.sliders["DSNU (Offset FPN)"].get()
         
+        # --- Get base scalar strengths from sliders ---
         shot_noise_strength = self.sliders["Shot Noise (Poisson)"].get()
         read_noise_strength = self.sliders["Read Noise (Gaussian)"].get()
         color_strength = self.sliders["Color Noise"].get()
 
-        if luma_mask is not None:
-            shot_noise_strength *= luma_mask
-            read_noise_strength *= luma_mask
-            color_strength *= luma_mask
-
-        if np.any(shot_noise_strength > 0):
+        # --- Apply Shot Noise ---
+        if shot_noise_strength > 0:
             photon_scale = 50.0
             lam = np.clip(luma_image / 255.0 * photon_scale, 0.0, None)
             noisy_counts = rng.poisson(lam).astype(np.float32)
+            
+            # <-- FIX: Generate base shot noise array first
             shot_noise = (noisy_counts / photon_scale) * 255.0 - luma_image
-            luma_image += shot_noise * (shot_noise_strength / 5.0)
+            shot_noise *= (shot_noise_strength / 5.0) # Apply scalar strength
+            
+            # <-- FIX: Apply luma_mask to the noise array, not the scalar
+            if luma_mask is not None:
+                shot_noise *= luma_mask
+            
+            luma_image += shot_noise
 
-        luma_image += rng.normal(0, 1, luma_image.shape) * read_noise_strength
+        # --- Apply Read Noise ---
+        if read_noise_strength > 0:
+            # <-- FIX: Generate base read noise array first
+            read_noise = rng.normal(0, 1, luma_image.shape) * read_noise_strength
+
+            # <-- FIX: Apply luma_mask to the noise array
+            if luma_mask is not None:
+                read_noise *= luma_mask
+            
+            luma_image += read_noise
+
+        # --- Apply Banding ---
         luma_image += banding_map * 255 * self.sliders["Banding"].get()
         
+        # Convert to RGB for color operations
         final_image = np.stack([luma_image] * 3, axis=-1).astype(np.float32)
 
-        if np.any(color_strength > 0):
-            color_noise_map = rng.normal(0.0, 1.0, final_image.shape).astype(np.float32)
-            final_image += color_noise_map * np.expand_dims(color_strength, axis=-1)
+        # --- Apply Color Noise ---
+        if color_strength > 0:
+            # <-- FIX: Generate base color noise array first
+            color_noise_map = rng.normal(0.0, 1.0, final_image.shape) * color_strength
 
+            # <-- FIX: Apply luma_mask to the noise array (needs to be 3-channel for color)
+            if luma_mask is not None:
+                color_noise_map *= np.expand_dims(luma_mask, axis=-1)
+
+            final_image += color_noise_map
+
+        # --- Apply Fireflies ---
         firefly_density = self.sliders["Firefly Density (%)"].get() / 100.0
         if firefly_density > 0:
             num_fireflies = int(width * height * firefly_density)
@@ -441,6 +466,7 @@ class OrganicGrainGeneratorApp:
                 colors = np.clip(colors * intensity, 0.0, 255.0).astype(np.float32)
                 final_image[y_coords, x_coords, :] = colors
 
+        # --- Apply Bit Depth ---
         bit_depth = int(self.sliders["Bit Depth"].get())
         if bit_depth < 8:
             levels = 2**bit_depth
