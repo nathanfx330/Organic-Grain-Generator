@@ -8,6 +8,7 @@ import threading
 import logging
 import os
 import platform
+import colorsys
 
 # --- Setup professional logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,6 +22,34 @@ except AttributeError:
         BILINEAR = Image.BILINEAR
         LANCZOS = Image.LANCZOS
     resampling = _Res()
+
+# --- Tooltip Helper Class ---
+class Tooltip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tooltip_window = None
+        self.widget.bind("<Enter>", self.show_tooltip)
+        self.widget.bind("<Leave>", self.hide_tooltip)
+
+    def show_tooltip(self, event):
+        if self.tooltip_window or not self.text:
+            return
+        x, y, _, _ = self.widget.bbox("insert")
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 25
+        self.tooltip_window = tk.Toplevel(self.widget)
+        self.tooltip_window.wm_overrideredirect(True)
+        self.tooltip_window.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(self.tooltip_window, text=self.text, justify='left',
+                         background="#2D2D2D", foreground="#EAEAEA", relief='solid', borderwidth=1,
+                         font=("Helvetica", "9", "normal"), padx=8, pady=4)
+        label.pack(ipadx=1)
+
+    def hide_tooltip(self, event):
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+        self.tooltip_window = None
 
 class OrganicGrainGeneratorApp:
     def __init__(self, master):
@@ -36,6 +65,7 @@ class OrganicGrainGeneratorApp:
         self._cached_fixed_maps = {}
         self.pil_image = None
         self.processed_pil_image = None
+        self._cached_luma_arr = None # For caching luminance array
 
         # --- Zoom Properties ---
         self.zoom_window = None
@@ -45,6 +75,7 @@ class OrganicGrainGeneratorApp:
         self.ZOOM_VIEW_SIZE = 256
         self.zoom_levels = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0, 8.0, 16.0, 32.0]
         self.current_zoom_index = 3
+        self.debug_mask_var = tk.BooleanVar(value=False) # For visualizing luma mask
 
         # --- GUI Layout & Styling ---
         self.setup_dark_theme()
@@ -165,7 +196,18 @@ class OrganicGrainGeneratorApp:
         if self.height * new_scale > 0: self.canvas.yview_moveto(scroll_y / (self.height * new_scale))
 
     def create_widgets(self):
-        self.slider_defaults = {"Grain Size": 1, "PRNU (Gain FPN)": 0, "DSNU (Offset FPN)": 0, "Shot Noise (Poisson)": 0, "Read Noise (Gaussian)": 0, "Color Noise": 0, "Shadow Noise Bias": 0, "Banding": 0, "Bit Depth": 8, "Firefly Density (%)": 0, "Firefly Intensity": 0, "Firefly Coloration": 0, "Bloom / Crush": 0, "Bloom / Crush Strength": 100, "Denoise Param 1": 0, "Denoise Param 2": 10, "Mix": 100, "Micro-contrast": 0, "Texture Variation": 0, "Saturation": 0, "Filmic Saturation": 0, "Lift": 0, "Roll-off": 0, "Contrast": 0}
+        self.slider_defaults = {
+            "Grain Size": 1, "PRNU (Gain FPN)": 0, "DSNU (Offset FPN)": 0,
+            "Shot Noise (Poisson)": 0, "Read Noise (Gaussian)": 0, "Color Noise": 0,
+            "Shadow Noise Bias": 0, "Shadow Falloff": 2.5, "Banding": 0, "Bit Depth": 8,
+            "Firefly Density (%)": 0, "Firefly Intensity": 0, "Firefly Opacity": 100, "Firefly Coloration": 0,
+            "Bloom / Crush": 0, "Bloom / Crush Strength": 100, "Denoise Param 1": 0,
+            "Denoise Param 2": 10, "Mix": 100, "Micro-contrast": 0, "Texture Variation": 0,
+            "Saturation": 0, "Filmic Saturation": 0, "Lift": 0, "Roll-off": 0, "Contrast": 0,
+            "Diamond Grid Opacity": 0, "Diamond Grid Size": 8, "Diamond Color Count": 4, 
+            "Diamond Color Saturation": 50, "Diamond Edge Softness": 0,
+            "Glow Amount": 0, "Glow Radius": 20, "Glow Threshold": 90, "Soften Amount": 0, "Soften Mix": 100
+        }
         
         dim_frame = ttk.LabelFrame(self.control_frame, text="Dimensions"); dim_frame.pack(fill=tk.X, pady=5)
         ttk.Label(dim_frame, text="Width:").grid(row=0, column=0, padx=5, pady=2, sticky="w")
@@ -189,12 +231,25 @@ class OrganicGrainGeneratorApp:
 
         sliders_frame = ttk.LabelFrame(self.control_frame, text="Noise Parameters"); sliders_frame.pack(fill=tk.X, pady=5)
         self.sliders = {}
-        slider_params = {"Grain Size": (1, 8), "PRNU (Gain FPN)": (0, 5.0), "DSNU (Offset FPN)": (0, 10.0), "Shot Noise (Poisson)": (0, 5.0), "Read Noise (Gaussian)": (0, 15.0), "Color Noise": (0, 20.0), "Shadow Noise Bias": (0, 5.0), "Banding": (0, 0.1), "Bit Depth": (4, 8), "Firefly Density (%)": (0, 1.0), "Firefly Intensity": (0, 500.0), "Firefly Coloration": (0, 2.0)}
+        slider_params = {
+            "Grain Size": (1, 8), "PRNU (Gain FPN)": (0, 5.0), "DSNU (Offset FPN)": (0, 10.0),
+            "Shot Noise (Poisson)": (0, 5.0), "Read Noise (Gaussian)": (0, 15.0), "Color Noise": (0, 20.0),
+            "Shadow Noise Bias": (0, 5.0), "Shadow Falloff": (1.0, 10.0), "Banding": (0, 0.1),
+            "Bit Depth": (4, 8), "Firefly Density (%)": (0, 1.0), "Firefly Intensity": (0, 500.0),
+            "Firefly Opacity": (0, 100.0), "Firefly Coloration": (0, 2.0)
+        }
         for i, (name, params) in enumerate(slider_params.items()):
             ttk.Label(sliders_frame, text=name).grid(row=i, column=0, sticky="w", padx=5)
             slider = ttk.Scale(sliders_frame, from_=params[0], to=params[1], orient=tk.HORIZONTAL, command=self.on_slider_drag); slider.set(self.slider_defaults[name]); slider.grid(row=i, column=1, sticky="ew", padx=5, pady=2)
             slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders[name] = slider
-        sliders_frame.columnconfigure(1, weight=1); self.sliders["Shadow Noise Bias"].config(state="disabled")
+        
+        Tooltip(self.sliders["Shadow Noise Bias"], "Increases noise intensity in the darkest areas of the image.")
+        Tooltip(self.sliders["Shadow Falloff"], "Controls how tightly noise is concentrated in shadows.\nHigher values create a much faster, harsher falloff.")
+        Tooltip(self.sliders["Firefly Opacity"], "Controls the final visibility of the fireflies.")
+
+        sliders_frame.columnconfigure(1, weight=1)
+        self.sliders["Shadow Noise Bias"].config(state="disabled")
+        self.sliders["Shadow Falloff"].config(state="disabled")
 
         post_process_frame = ttk.LabelFrame(self.control_frame, text="Post-Processing"); post_process_frame.pack(fill=tk.X, pady=5)
         ttk.Label(post_process_frame, text="Bloom / Crush").grid(row=0, column=0, sticky="w", padx=5)
@@ -210,6 +265,25 @@ class OrganicGrainGeneratorApp:
         ttk.Label(post_process_frame, text="Mix (%)").grid(row=5, column=0, sticky="w", padx=5)
         mix_slider = ttk.Scale(post_process_frame, from_=0, to=100, orient=tk.HORIZONTAL, command=self.on_slider_drag); mix_slider.set(self.slider_defaults["Mix"]); mix_slider.grid(row=5, column=1, sticky="ew", padx=5, pady=2); mix_slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders["Mix"] = mix_slider
         post_process_frame.columnconfigure(1, weight=1)
+
+        optical_frame = ttk.LabelFrame(self.control_frame, text="Optical Effects")
+        optical_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(optical_frame, text="Soften Amount").grid(row=0, column=0, sticky="w", padx=5)
+        sa_slider = ttk.Scale(optical_frame, from_=0, to=25, orient=tk.HORIZONTAL, command=self.on_slider_drag); sa_slider.set(self.slider_defaults["Soften Amount"]); sa_slider.grid(row=0, column=1, sticky="ew", padx=5, pady=2); sa_slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders["Soften Amount"] = sa_slider
+        Tooltip(sa_slider, "Controls the radius/size of the softening blur.")
+        ttk.Label(optical_frame, text="Soften Mix (%)").grid(row=1, column=0, sticky="w", padx=5)
+        sm_slider = ttk.Scale(optical_frame, from_=0, to=100, orient=tk.HORIZONTAL, command=self.on_slider_drag); sm_slider.set(self.slider_defaults["Soften Mix"]); sm_slider.grid(row=1, column=1, sticky="ew", padx=5, pady=2); sm_slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders["Soften Mix"] = sm_slider
+        Tooltip(sm_slider, "Controls the opacity/strength of the softening effect.")
+        ttk.Label(optical_frame, text="Glow Amount (%)").grid(row=2, column=0, sticky="w", padx=5)
+        ga_slider = ttk.Scale(optical_frame, from_=0, to=100, orient=tk.HORIZONTAL, command=self.on_slider_drag); ga_slider.set(self.slider_defaults["Glow Amount"]); ga_slider.grid(row=2, column=1, sticky="ew", padx=5, pady=2); ga_slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders["Glow Amount"] = ga_slider
+        Tooltip(ga_slider, "Overall strength of the halation/glow effect.")
+        ttk.Label(optical_frame, text="Glow Radius").grid(row=3, column=0, sticky="w", padx=5)
+        gr_slider = ttk.Scale(optical_frame, from_=0, to=100, orient=tk.HORIZONTAL, command=self.on_slider_drag); gr_slider.set(self.slider_defaults["Glow Radius"]); gr_slider.grid(row=3, column=1, sticky="ew", padx=5, pady=2); gr_slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders["Glow Radius"] = gr_slider
+        Tooltip(gr_slider, "How far the glow spreads from the highlights.")
+        ttk.Label(optical_frame, text="Glow Threshold").grid(row=4, column=0, sticky="w", padx=5)
+        gt_slider = ttk.Scale(optical_frame, from_=50, to=100, orient=tk.HORIZONTAL, command=self.on_slider_drag); gt_slider.set(self.slider_defaults["Glow Threshold"]); gt_slider.grid(row=4, column=1, sticky="ew", padx=5, pady=2); gt_slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders["Glow Threshold"] = gt_slider
+        Tooltip(gt_slider, "The brightness level required for a pixel to start glowing.\n(100 = only the absolute brightest pixels will glow).")
+        optical_frame.columnconfigure(1, weight=1)
         
         texture_frame = ttk.LabelFrame(self.control_frame, text="Texture & Clarity"); texture_frame.pack(fill=tk.X, pady=5)
         ttk.Label(texture_frame, text="Micro-contrast").grid(row=0, column=0, sticky="w", padx=5)
@@ -230,6 +304,20 @@ class OrganicGrainGeneratorApp:
         ttk.Label(tone_frame, text="Contrast").grid(row=4, column=0, sticky="w", padx=5)
         contrast_slider = ttk.Scale(tone_frame, from_=-100, to=100, orient=tk.HORIZONTAL, command=self.on_slider_drag); contrast_slider.set(self.slider_defaults["Contrast"]); contrast_slider.grid(row=4, column=1, sticky="ew", padx=5, pady=2); contrast_slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders["Contrast"] = contrast_slider
         tone_frame.columnconfigure(1, weight=1)
+
+        overlay_frame = ttk.LabelFrame(self.control_frame, text="Overlays & Effects")
+        overlay_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(overlay_frame, text="Diamond Grid Opacity").grid(row=0, column=0, sticky="w", padx=5)
+        dgo_slider = ttk.Scale(overlay_frame, from_=0, to=100, orient=tk.HORIZONTAL, command=self.on_slider_drag); dgo_slider.set(self.slider_defaults["Diamond Grid Opacity"]); dgo_slider.grid(row=0, column=1, sticky="ew", padx=5, pady=2); dgo_slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders["Diamond Grid Opacity"] = dgo_slider
+        ttk.Label(overlay_frame, text="Diamond Grid Size").grid(row=1, column=0, sticky="w", padx=5)
+        dgs_slider = ttk.Scale(overlay_frame, from_=2, to=64, orient=tk.HORIZONTAL, command=self.on_slider_drag); dgs_slider.set(self.slider_defaults["Diamond Grid Size"]); dgs_slider.grid(row=1, column=1, sticky="ew", padx=5, pady=2); dgs_slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders["Diamond Grid Size"] = dgs_slider
+        ttk.Label(overlay_frame, text="Diamond Edge Softness").grid(row=2, column=0, sticky="w", padx=5)
+        des_slider = ttk.Scale(overlay_frame, from_=0, to=25, orient=tk.HORIZONTAL, command=self.on_slider_drag); des_slider.set(self.slider_defaults["Diamond Edge Softness"]); des_slider.grid(row=2, column=1, sticky="ew", padx=5, pady=2); des_slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders["Diamond Edge Softness"] = des_slider
+        ttk.Label(overlay_frame, text="Diamond Color Count").grid(row=3, column=0, sticky="w", padx=5)
+        dcc_slider = ttk.Scale(overlay_frame, from_=2, to=8, orient=tk.HORIZONTAL, command=self.on_slider_drag); dcc_slider.set(self.slider_defaults["Diamond Color Count"]); dcc_slider.grid(row=3, column=1, sticky="ew", padx=5, pady=2); dcc_slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders["Diamond Color Count"] = dcc_slider
+        ttk.Label(overlay_frame, text="Diamond Color Saturation").grid(row=4, column=0, sticky="w", padx=5)
+        dcs_slider = ttk.Scale(overlay_frame, from_=0, to=100, orient=tk.HORIZONTAL, command=self.on_slider_drag); dcs_slider.set(self.slider_defaults["Diamond Color Saturation"]); dcs_slider.grid(row=4, column=1, sticky="ew", padx=5, pady=2); dcs_slider.bind("<ButtonRelease-1>", self.on_slider_release); self.sliders["Diamond Color Saturation"] = dcs_slider
+        overlay_frame.columnconfigure(1, weight=1)
 
         ttk.Button(self.control_frame, text="Reset All Settings", command=self.reset_all_sliders).pack(fill=tk.X, pady=(10,5))
 
@@ -268,14 +356,27 @@ class OrganicGrainGeneratorApp:
         result[~low_mask] = 1 - 2 * (1 - background[~low_mask]) * (1 - grain_plate[~low_mask])
         return result
 
+    def _update_cached_luma_array(self):
+        if self.background_pil_image:
+            self._cached_luma_arr = np.array(self.background_pil_image.convert('L'), dtype=np.float32) / 255.0
+        else:
+            self._cached_luma_arr = None
+
     def _generate_base_image(self, seed_offset=0, composite=True):
         luma_mask = None
-        shadow_bias_strength = self.sliders["Shadow Noise Bias"].get() if self.background_pil_image else 0.0
+        shadow_bias_strength = self.sliders["Shadow Noise Bias"].get() if self._cached_luma_arr is not None else 0.0
         
-        if self.background_pil_image and shadow_bias_strength > 0:
-            luma_arr_float = np.array(self.background_pil_image.convert('L'), dtype=np.float32) / 255.0
-            luma_mask = 1.0 + ((1.0 - luma_arr_float) * float(shadow_bias_strength))
-        
+        if self._cached_luma_arr is not None and shadow_bias_strength > 0:
+            luma_map = self._cached_luma_arr
+            shadow_map = 1.0 - luma_map
+            
+            falloff_curve = self.sliders["Shadow Falloff"].get()
+            curved_shadow_map = shadow_map ** falloff_curve
+            
+            noise_multiplier = curved_shadow_map * float(shadow_bias_strength)
+            
+            luma_mask = np.clip(1.0 + noise_multiplier, 1.0, 4.0)
+
         factor = self.get_supersample_factor()
         render_width, render_height = self.width * factor, self.height * factor
 
@@ -286,11 +387,7 @@ class OrganicGrainGeneratorApp:
         grain_plate_arr = self._generate_grain_plate(render_width, render_height, seed_offset, luma_mask)
         if factor > 1:
             grain_plate_arr = np.array(Image.fromarray(grain_plate_arr).resize((self.width, self.height), resample=resampling.LANCZOS))
-
-        if composite and self.background_pil_image:
-            bg_arr_float = np.array(self.background_pil_image.convert('RGB'), dtype=np.float32) / 255.0
-            grain_arr_float = np.array(Image.fromarray(grain_plate_arr).convert('RGB'), dtype=np.float32) / 255.0
-            return np.clip(self._overlay_blend(bg_arr_float, grain_arr_float) * 255.0, 0, 255).astype(np.uint8)
+        
         return grain_plate_arr
 
     def _resize_noise_array(self, noise_array, target_w, target_h):
@@ -341,11 +438,22 @@ class OrganicGrainGeneratorApp:
             if luma_mask is not None: color_noise_map *= np.expand_dims(luma_mask, axis=-1)
             final_image += color_noise_map
 
-        if (density := self.sliders["Firefly Density (%)"].get() / 100.0) > 0 and (num := int(width*height*density)) > 0:
-            y, x = rng.integers(0, height, num), rng.integers(0, width, num)
-            base = rng.random((num, 3)); gray = (base @ [0.299, 0.587, 0.114])[:, None]
-            colors = gray + (base - gray) * self.sliders["Firefly Coloration"].get()
-            final_image[y, x, :] = np.clip(colors * self.sliders["Firefly Intensity"].get(), 0, 255)
+        if (density := self.sliders["Firefly Density (%)"].get() / 100.0) > 0:
+            intensity = self.sliders["Firefly Intensity"].get()
+            opacity = self.sliders["Firefly Opacity"].get() / 100.0
+            coloration = self.sliders["Firefly Coloration"].get()
+
+            if intensity > 0 and opacity > 0 and (num := int(width*height*density)) > 0:
+                y, x = rng.integers(0, height, num), rng.integers(0, width, num)
+                
+                brightness = rng.uniform(0.5, 1.0, (num, 1))
+                gray_base = np.repeat(brightness, 3, axis=1)
+                random_color = rng.random((num, 3))
+                colored_base = np.clip(gray_base * (1.0 - coloration) + random_color * coloration, 0.0, 1.0)
+                firefly_values = colored_base * intensity * opacity
+                
+                current_pixels = final_image[y, x, :].astype(np.float32)
+                final_image[y, x, :] = np.clip(current_pixels + firefly_values, 0, 255).astype(np.uint8)
 
         if (bit_depth := int(self.sliders["Bit Depth"].get())) < 8:
             levels = 2**bit_depth; final_image = np.round(final_image / 255 * (levels-1)) * (255 / (levels-1))
@@ -356,7 +464,7 @@ class OrganicGrainGeneratorApp:
         if res_key in self._cached_fixed_maps: return self._cached_fixed_maps[res_key]
         
         rng = self.get_rng_for_frame(0)
-        prnu = 1.0 + (rng.standard_normal((height, width), np.float32) * 0.005)
+        prnu = 1.0 + (rng.standard_normal((height, width), np.float32) * 0.02)
         dsnu = rng.standard_normal((height, width), np.float32)
         
         perlin_legacy = PerlinNoise(octaves=6, seed=self.get_master_seed())
@@ -401,8 +509,25 @@ class OrganicGrainGeneratorApp:
             threading.Thread(target=self._update_noise_worker, daemon=True).start()
 
     def _get_processed_image(self, seed_offset=0, composite=True):
-        image_to_process = Image.fromarray(self._generate_base_image(seed_offset, composite))
-        
+        if composite and self.background_pil_image:
+            base_image = self.background_pil_image
+        else:
+            base_image = Image.new('RGB', (self.width, self.height), (128, 128, 128))
+
+        image_to_process = self._apply_halation_glow(base_image)
+        image_to_process = self._apply_box_blur(image_to_process)
+
+        grain_plate_arr = self._generate_base_image(seed_offset, composite=False)
+        grain_image = Image.fromarray(grain_plate_arr)
+
+        if composite and self.background_pil_image:
+            bg_arr_float = np.array(image_to_process, dtype=np.float32) / 255.0
+            grain_arr_float = np.array(grain_image.convert('RGB'), dtype=np.float32) / 255.0
+            blended_arr = np.clip(self._overlay_blend(bg_arr_float, grain_arr_float) * 255.0, 0, 255).astype(np.uint8)
+            image_to_process = Image.fromarray(blended_arr)
+        else:
+            image_to_process = grain_image
+
         bloom_crush_val = self.sliders["Bloom / Crush"].get()
         strength_percent = self.sliders["Bloom / Crush Strength"].get()
         if bloom_crush_val != 0 and strength_percent > 0:
@@ -428,8 +553,62 @@ class OrganicGrainGeneratorApp:
         s_curve_lut = self._generate_s_curve_lut()
         if s_curve_lut is not None:
             image_to_process = self._apply_lut(image_to_process, s_curve_lut)
+        
+        image_to_process = self._apply_diamond_grid(image_to_process)
         return image_to_process
     
+    def _apply_box_blur(self, image_to_process):
+        raw_amount = self.sliders["Soften Amount"].get()
+        mix_alpha = self.sliders["Soften Mix"].get() / 100.0
+
+        if raw_amount == 0 or mix_alpha == 0 or self.background_pil_image is None:
+            return image_to_process
+
+        normalized_amount = raw_amount / 25.0
+        curved_amount = normalized_amount ** 2.0
+        final_amount = int(curved_amount * 25.0)
+
+        if final_amount == 0:
+            return image_to_process
+
+        kernel_size = final_amount * 2 + 1
+        
+        bgr_array = cv2.cvtColor(np.array(image_to_process), cv2.COLOR_RGB2BGR)
+        blurred_bgr = cv2.blur(bgr_array, (kernel_size, kernel_size))
+        blurred_image = Image.fromarray(cv2.cvtColor(blurred_bgr, cv2.COLOR_BGR2RGB))
+
+        return Image.blend(image_to_process, blurred_image, alpha=mix_alpha)
+
+    def _apply_halation_glow(self, image_to_process):
+        amount = self.sliders["Glow Amount"].get() / 100.0
+        if amount == 0 or self.background_pil_image is None:
+            return image_to_process
+
+        radius = int(self.sliders["Glow Radius"].get())
+        threshold = self.sliders["Glow Threshold"].get() / 100.0 * 255.0
+
+        luma_image = image_to_process.convert('L')
+        luma_arr = np.array(luma_image)
+        highlight_mask = (luma_arr > threshold).astype(np.uint8) * 255
+
+        image_arr = np.array(image_to_process)
+        highlights_only_arr = cv2.bitwise_and(image_arr, image_arr, mask=highlight_mask)
+        
+        if radius > 0:
+            kernel_size = radius * 2 + 1
+            blurred_highlights = cv2.GaussianBlur(highlights_only_arr, (kernel_size, kernel_size), 0)
+        else:
+            blurred_highlights = highlights_only_arr
+        
+        base_arr_float = image_arr.astype(np.float32) / 255.0
+        glow_arr_float = blurred_highlights.astype(np.float32) / 255.0
+        
+        screened_arr_float = 1.0 - (1.0 - base_arr_float) * (1.0 - glow_arr_float)
+        
+        glow_image = Image.fromarray((screened_arr_float * 255).astype(np.uint8))
+
+        return Image.blend(image_to_process, glow_image, alpha=amount)
+
     def _apply_bloom_crush(self, image_to_process, value):
         bgr_array = cv2.cvtColor(np.array(image_to_process), cv2.COLOR_RGB2BGR)
         kernel_size = abs(int(value)) * 2 + 1
@@ -517,6 +696,51 @@ class OrganicGrainGeneratorApp:
         bgr_array = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
         toned_bgr = cv2.LUT(bgr_array, lut)
         return Image.fromarray(cv2.cvtColor(toned_bgr, cv2.COLOR_BGR2RGB))
+    
+    def _apply_diamond_grid(self, image_to_process):
+        opacity = self.sliders["Diamond Grid Opacity"].get() / 100.0
+        if opacity == 0:
+            return image_to_process
+
+        size = max(2, int(self.sliders["Diamond Grid Size"].get()))
+        softness = int(self.sliders["Diamond Edge Softness"].get())
+        color_count = int(self.sliders["Diamond Color Count"].get())
+        saturation = self.sliders["Diamond Color Saturation"].get() / 100.0
+        
+        rng = np.random.default_rng(self.get_master_seed() + 42)
+        palette = []
+        for i in range(color_count):
+            hue = rng.random()
+            rgb_float = colorsys.hsv_to_rgb(hue, saturation, 1.0)
+            palette.append([int(c * 255) for c in rgb_float])
+        palette = np.array(palette, dtype=np.uint8)
+
+        w, h = image_to_process.size
+        y_coords, x_coords = np.indices((h, w))
+        
+        pattern_a = ((x_coords + y_coords) // size) % color_count
+        pattern_b = ((x_coords - y_coords) // size) % color_count
+        pattern_index = (pattern_a + pattern_b) % color_count
+        
+        color_overlay_arr = palette[pattern_index]
+
+        if softness > 0:
+            kernel_size = softness * 2 + 1
+            color_overlay_arr = cv2.GaussianBlur(color_overlay_arr, (kernel_size, kernel_size), 0)
+
+        base_arr = np.array(image_to_process, dtype=np.float32) / 255.0
+        overlay_arr = color_overlay_arr.astype(np.float32) / 255.0
+
+        low_mask = base_arr <= 0.5
+        high_mask = ~low_mask
+        
+        blended_arr = np.zeros_like(base_arr)
+        blended_arr[low_mask] = 2 * base_arr[low_mask] * overlay_arr[low_mask]
+        blended_arr[high_mask] = 1 - 2 * (1 - base_arr[high_mask]) * (1 - overlay_arr[high_mask])
+
+        blended_image = Image.fromarray((blended_arr * 255).astype(np.uint8))
+        
+        return Image.blend(image_to_process, blended_image, alpha=opacity)
 
     def _update_display_image(self):
         if not self.pil_image: return
@@ -588,15 +812,19 @@ class OrganicGrainGeneratorApp:
             self.width_var.set(str(self.width)); self.height_var.set(str(self.height))
             self.width_entry.config(state="disabled"); self.height_entry.config(state="disabled"); self.update_dim_button.config(state="disabled")
             self.bg_status_label.config(text=f"Loaded: {os.path.basename(fp)}")
+            self._update_cached_luma_array()
             self.sliders["Shadow Noise Bias"].config(state="normal")
+            self.sliders["Shadow Falloff"].config(state="normal")
             self.show_original_check.config(state="normal")
             self.update_noise()
         except Exception as e: logging.error(f"Failed to load image: {e}"); self.clear_background_image()
     def clear_background_image(self):
         self.background_pil_image = None
+        self._update_cached_luma_array()
         self.width_entry.config(state="normal"); self.height_entry.config(state="normal"); self.update_dim_button.config(state="normal")
         self.bg_status_label.config(text="Status: No Image Loaded")
         self.sliders["Shadow Noise Bias"].set(0); self.sliders["Shadow Noise Bias"].config(state="disabled")
+        self.sliders["Shadow Falloff"].set(self.slider_defaults["Shadow Falloff"]); self.sliders["Shadow Falloff"].config(state="disabled")
         self.show_original_var.set(False); self.show_original_check.config(state="disabled")
         self.update_noise()
     def reset_all_sliders(self):
@@ -642,22 +870,61 @@ class OrganicGrainGeneratorApp:
         except: return 0
     def update_zoom_view(self):
         if not self.zoom_window or not self.pil_image: return
-        cs = int(self.ZOOM_VIEW_SIZE / self.ZOOM_FACTOR)
-        w, h = self.pil_image.size; cx, cy = w // 2, h // 2
-        box = (max(0, cx-cs//2), max(0, cy-cs//2), min(w, cx+cs//2), min(h, cy+cs//2))
-        zoomed = self.pil_image.crop(box).resize((self.ZOOM_VIEW_SIZE, self.ZOOM_VIEW_SIZE), resample=resampling.NEAREST)
-        self.zoom_photo_image = ImageTk.PhotoImage(zoomed); self.zoom_label.config(image=self.zoom_photo_image)
+        
+        image_to_show = None
+        if self.debug_mask_var.get() and self._cached_luma_arr is not None:
+            shadow_bias_strength = self.sliders["Shadow Noise Bias"].get()
+            falloff_curve = self.sliders["Shadow Falloff"].get()
+            luma_map = self._cached_luma_arr
+            shadow_map = 1.0 - luma_map
+            curved_shadow_map = shadow_map ** falloff_curve
+            noise_multiplier = curved_shadow_map * float(shadow_bias_strength)
+            luma_mask = np.clip(1.0 + noise_multiplier, 1.0, 4.0)
+            
+            normalized_mask = ((luma_mask - 1.0) / 3.0) * 255.0
+            mask_img = Image.fromarray(normalized_mask.astype(np.uint8))
+            image_to_show = mask_img.resize((self.ZOOM_VIEW_SIZE, self.ZOOM_VIEW_SIZE), resample=resampling.NEAREST)
+        else:
+            cs = int(self.ZOOM_VIEW_SIZE / self.ZOOM_FACTOR)
+            w, h = self.pil_image.size
+            cx, cy = w // 2, h // 2
+            box = (max(0, cx - cs // 2), max(0, cy - cs // 2), min(w, cx + cs // 2), min(h, cy + cs // 2))
+            cropped_img = self.pil_image.crop(box)
+            image_to_show = cropped_img.resize((self.ZOOM_VIEW_SIZE, self.ZOOM_VIEW_SIZE), resample=resampling.NEAREST)
+
+        self.zoom_photo_image = ImageTk.PhotoImage(image_to_show)
+        self.zoom_label.config(image=self.zoom_photo_image)
+
     def toggle_zoom_window(self):
-        if self.zoom_window: self.on_zoom_window_close()
+        if self.zoom_window:
+            self.on_zoom_window_close()
         else:
             self.zoom_window = tk.Toplevel(self.master)
-            self.zoom_window.title(f"Detail View ({self.ZOOM_FACTOR * 100:.0f}%)"); self.zoom_window.geometry(f"{self.ZOOM_VIEW_SIZE}x{self.ZOOM_VIEW_SIZE}"); self.zoom_window.resizable(False, False)
-            self.zoom_label = ttk.Label(self.zoom_window); self.zoom_label.pack(fill=tk.BOTH, expand=True)
-            self.zoom_window.protocol("WM_DELETE_WINDOW", self.on_zoom_window_close); self.zoom_button.config(text="Hide Detail View")
+            self.zoom_window.title(f"Detail View ({self.ZOOM_FACTOR * 100:.0f}%)")
+            self.zoom_window.geometry(f"{self.ZOOM_VIEW_SIZE}x{self.ZOOM_VIEW_SIZE + 30}")
+            self.zoom_window.resizable(False, False)
+            
+            self.zoom_label = ttk.Label(self.zoom_window)
+            self.zoom_label.pack(fill=tk.BOTH, expand=True)
+            
+            debug_frame = ttk.Frame(self.zoom_window, style="Dark.TFrame")
+            debug_frame.pack(fill=tk.X, pady=5)
+            check = ttk.Checkbutton(debug_frame, text="Show Luma Mask", variable=self.debug_mask_var, command=self.update_zoom_view)
+            check.pack()
+            if self._cached_luma_arr is None:
+                check.config(state="disabled")
+
+            self.zoom_window.protocol("WM_DELETE_WINDOW", self.on_zoom_window_close)
+            self.zoom_button.config(text="Hide Detail View")
             self.update_noise()
+
     def on_zoom_window_close(self):
         if self.zoom_window: self.zoom_window.destroy()
-        self.zoom_window = None; self.zoom_label = None; self.zoom_button.config(text="Show Detail View")
+        self.zoom_window = None
+        self.zoom_label = None
+        self.debug_mask_var.set(False)
+        self.zoom_button.config(text="Hide Detail View")
+        self.update_noise()
 
 if __name__ == "__main__":
     root = tk.Tk()
